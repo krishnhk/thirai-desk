@@ -3,30 +3,15 @@ import { Router, RouterLink } from '@angular/router';
 
 import { AdminStore, ShowInput } from '../../core/admin-store';
 import {
-  MINUTE, addMinutes, formatDate, formatDay, formatDuration, formatMoney, formatNumber, formatTime, fromDateInput, sameDay, startOfDay,
-  toDateInput, toTimeInput, withTime,
+  addMinutes, formatDay, formatDuration, formatMoney, formatNumber, formatTime, fromDateInput, sameDay, toDateInput, toTimeInput, withTime,
 } from '../../core/format';
-import { layoutStats } from '../../core/layout';
-import { Issue, Movie, ProjectionFormat, Screen, Show } from '../../core/models';
+import { findSeat, layoutStats } from '../../core/layout';
+import { Issue, Movie, PROJECTION_FORMATS, ProjectionFormat, Screen, Show } from '../../core/models';
 import { ConfirmService, ToastService } from '../../shared/feedback';
 import { IconComponent } from '../../shared/icon.component';
-import { EmptyStateComponent, PageHeaderComponent, StatusBadgeComponent } from '../../shared/ui';
+import { SeatMapComponent } from '../../shared/seat-map.component';
+import { EmptyStateComponent, StatusBadgeComponent } from '../../shared/ui';
 import { editMode, errorsOf, priceRange, warningsOf } from './show-utils';
-
-const STEPS = [
-  { n: 1, label: 'Film' },
-  { n: 2, label: 'Screen and schedule' },
-  { n: 3, label: 'Pricing' },
-  { n: 4, label: 'Review' },
-] as const;
-
-/** Which wizard step an issue belongs to. */
-function stepOf(issue: Issue): number {
-  const w = issue.where ?? '';
-  if (w === 'movie' || w === 'format' || w === 'language') return 1;
-  if (w.startsWith('price:')) return 3;
-  return 2;
-}
 
 /** Projection formats that need a matching screen. Everything else plays on any screen. */
 function formatFits(format: ProjectionFormat, screen: Screen): boolean {
@@ -45,21 +30,11 @@ function preferredFormat(movie: Movie, screen: Screen | undefined): ProjectionFo
   return movie.formats.includes('2D') ? '2D' : (movie.formats[0] ?? '');
 }
 
-interface TimelineBlock {
-  id: string;
-  label: string;
-  left: number;
-  width: number;
-  buffer: number;
-  kind: 'published' | 'draft' | 'new';
-  conflict: boolean;
-}
-
-/** Create or edit a show in four steps: film, screen and time, prices, review. */
+/** Create or edit a show on one page: film and screen, date and time, pricing, with a live seat inventory beside it. */
 @Component({
   selector: 'app-show-editor-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, IconComponent, PageHeaderComponent, EmptyStateComponent, StatusBadgeComponent],
+  imports: [RouterLink, IconComponent, EmptyStateComponent, StatusBadgeComponent, SeatMapComponent],
   templateUrl: './show-editor.page.html',
   styleUrl: './show-editor.page.css',
 })
@@ -78,9 +53,6 @@ export class ShowEditorPage implements OnInit {
   /** `?time=HH:mm` (24 h) preselects the start time, as the calendar links do. */
   readonly timeParam = input<string | undefined>(undefined, { alias: 'time' });
 
-  protected readonly steps = STEPS;
-  protected readonly step = signal(1);
-
   protected readonly movieId = signal('');
   protected readonly format = signal<ProjectionFormat | ''>('');
   protected readonly language = signal('');
@@ -89,9 +61,10 @@ export class ShowEditorPage implements OnInit {
   protected readonly day = signal('');
   protected readonly time = signal('');
   protected readonly intermission = signal(0);
+  /** Ticket price of each seat category of the screen, by category id. */
   protected readonly prices = signal<Record<string, number>>({});
-  protected readonly movieQuery = signal('');
-  protected readonly saving = signal(false);
+  /** Customers can buy seats once the show is published. */
+  protected readonly bookingOpen = signal(true);
 
   protected readonly existing = computed<Show | undefined>(() => {
     const id = this.showId();
@@ -118,7 +91,6 @@ export class ShowEditorPage implements OnInit {
       this.time.set(toTimeInput(s.start));
       this.intermission.set(s.intermission);
       this.prices.set({ ...s.prices });
-      if (this.access().mode === 'prices') this.step.set(3);
       return;
     }
     this.intermission.set(this.store.settings().defaultIntermission);
@@ -126,74 +98,53 @@ export class ShowEditorPage implements OnInit {
     const t = this.timeParam();
     if (t && /^\d{1,2}:\d{2}$/.test(t)) this.time.set(t.padStart(5, '0'));
     const pre = this.screen() ? this.store.screen(this.screen()!) : undefined;
-    if (pre && this.store.inScope(pre.theatreId)) {
-      this.theatreId.set(pre.theatreId);
-      if (this.store.isSchedulable(pre)) this.chooseScreen(pre.id);
-    } else {
-      const active = this.store.scopedTheatres().filter((t) => t.status === 'active');
-      if (active.length === 1) this.theatreId.set(active[0]!.id);
-    }
+    if (pre && this.store.inScope(pre.theatreId) && this.store.isSchedulable(pre)) this.chooseScreen(pre.id);
   }
 
-  // ------------------------------------------------------------------ Step 1: film
+  // ------------------------------------------------------------------ Film and screen
 
   protected readonly movie = computed<Movie | undefined>(() => this.store.movie(this.movieId()));
-  protected readonly movieList = computed(() => {
-    const q = this.movieQuery().trim().toLowerCase();
-    return this.store.movies()
-      .filter((m) => !q || m.title.toLowerCase().includes(q) || m.languages.some((l) => l.toLowerCase().includes(q)) || m.genres.some((g) => g.toLowerCase().includes(q)))
-      .sort((a, b) => b.releaseDate.getTime() - a.releaseDate.getTime());
-  });
+  protected readonly movieList = computed(() => [...this.store.movies()].sort((a, b) => b.releaseDate.getTime() - a.releaseDate.getTime()));
 
-  protected chooseMovie(m: Movie): void {
+  protected chooseMovie(id: string): void {
+    const m = this.store.movie(id);
+    if (!m) return;
     this.movieId.set(m.id);
-    const scr = this.selectedScreen();
-    if (!this.format() || !m.formats.includes(this.format() as ProjectionFormat)) {
-      this.format.set(preferredFormat(m, scr));
-    }
+    if (!this.format() || !m.formats.includes(this.format() as ProjectionFormat)) this.format.set(preferredFormat(m, this.selectedScreen()));
     if (!m.languages.includes(this.language())) this.language.set(m.languages[0] ?? '');
   }
 
-  // ------------------------------------------------------------------ Step 2: screen and time
-
   protected readonly theatre = computed(() => this.store.theatre(this.theatreId()));
-  protected readonly theatreOptions = computed(() => this.store.scopedTheatres());
   protected readonly selectedScreen = computed(() => this.store.screen(this.screenId()));
+  protected readonly multiTheatre = computed(() => this.store.scopedTheatres().length > 1);
   protected readonly screenOptions = computed(() => {
-    const day = this.day() ? fromDateInput(this.day()) : null;
-    return this.store.screens()
-      .filter((s) => s.theatreId === this.theatreId())
-      .sort((a, b) => a.number - b.number)
+    const theatres = new Map(this.store.theatres().map((t) => [t.id, t]));
+    return this.store.scopedScreens()
+      .slice()
+      .sort((a, b) => (theatres.get(a.theatreId)?.name ?? '').localeCompare(theatres.get(b.theatreId)?.name ?? '') || a.number - b.number)
       .map((s) => ({
         screen: s,
         ok: this.store.isSchedulable(s),
-        reason: s.status !== 'active' ? 'Inactive: out of service' : !s.layout ? 'No published seat layout' : '',
-        seats: this.store.capacity(s.id),
-        showsThatDay: day ? this.store.shows().filter((x) => x.screenId === s.id && !x.cancellation && sameDay(x.start, day) && x.id !== this.existing()?.id).length : 0,
+        reason: s.status !== 'active' ? 'inactive' : !s.layout ? 'no seat layout' : '',
+        label: `${this.multiTheatre() ? (theatres.get(s.theatreId)?.name ?? '') + ' · ' : ''}${s.name} · ${PROJECTION_FORMATS.filter((f) => formatFits(f, s)).join(', ')}`,
       }));
   });
-
-  protected chooseTheatre(id: string): void {
-    if (id === this.theatreId()) return;
-    this.theatreId.set(id);
-    this.screenId.set('');
-  }
 
   protected chooseScreen(id: string): void {
     const screen = this.store.screen(id);
     this.screenId.set(id);
-    // Prices follow the screen's seat categories; keep any the new screen shares.
-    const next: Record<string, number> = {};
-    for (const c of screen?.layout?.categories ?? []) next[c.id] = this.prices()[c.id] ?? c.basePrice;
-    this.prices.set(next);
+    if (screen) this.theatreId.set(screen.theatreId);
+    this.resetPrices();
   }
+
+  // ------------------------------------------------------------------ Date and time
 
   protected readonly start = computed<Date | null>(() => (this.day() && /^\d{1,2}:\d{2}$/.test(this.time()) ? withTime(fromDateInput(this.day()), this.time()) : null));
   protected readonly runtime = computed(() => this.movie()?.runtime ?? 0);
   protected readonly end = computed(() => { const s = this.start(); return s ? addMinutes(s, this.runtime() + this.intermission()) : null; });
   protected readonly readyAt = computed(() => { const e = this.end(); return e ? addMinutes(e, this.store.settings().bufferMinutes) : null; });
 
-  /** Other shows on the chosen screen that day, for the conflict timeline. */
+  /** Other shows on the chosen screen that day. */
   protected readonly dayShows = computed(() => {
     const id = this.screenId();
     if (!id || !this.day()) return [];
@@ -203,57 +154,32 @@ export class ShowEditorPage implements OnInit {
       .sort((a, b) => a.start.getTime() - b.start.getTime());
   });
 
-  protected readonly timeline = computed(() => {
-    const day = this.day() ? fromDateInput(this.day()) : startOfDay(this.store.now());
-    const base = startOfDay(day).getTime();
-    const shows = this.dayShows();
+  /** Shows on the screen that clash with this one, cleaning buffer included. */
+  protected readonly overlaps = computed(() => {
     const s = this.start();
-    const starts = [...shows.map((x) => x.start.getTime()), ...(s ? [s.getTime()] : [])];
-    const ends = [...shows.map((x) => this.store.turnaroundEnd(x).getTime()), ...(this.readyAt() ? [this.readyAt()!.getTime()] : [])];
-    const hour = 60 * MINUTE;
-    const from = Math.min(base + 8 * hour, ...starts.map((t) => Math.floor((t - base) / hour) * hour + base));
-    const to = Math.max(base + 24 * hour, ...ends.map((t) => Math.ceil((t - base) / hour) * hour + base));
-    const span = to - from;
-    const pct = (t: number) => ((t - from) / span) * 100;
-    const startIssues = this.issues().filter((i) => i.where === 'start');
-    const blocks: TimelineBlock[] = shows.map((x) => {
-      const e = this.store.showEnd(x).getTime();
-      const title = this.store.movie(x.movieId)?.title ?? 'Film';
-      return {
-        id: x.id, label: `${formatTime(x.start)} ${title}`, left: pct(x.start.getTime()), width: pct(e) - pct(x.start.getTime()),
-        buffer: pct(this.store.turnaroundEnd(x).getTime()) - pct(e), kind: x.publication === 'draft' ? 'draft' : 'published',
-        conflict: startIssues.some((i) => i.message.includes(`${title} at ${formatTime(x.start)}`)),
-      };
-    });
-    if (s && this.end()) {
-      blocks.push({
-        id: 'new', label: `${formatTime(s)} ${this.movie()?.title ?? 'This show'}`, left: pct(s.getTime()), width: pct(this.end()!.getTime()) - pct(s.getTime()),
-        buffer: pct(this.readyAt()!.getTime()) - pct(this.end()!.getTime()), kind: 'new', conflict: startIssues.some((i) => i.level === 'error'),
-      });
-    }
-    const ticks: { left: number; label: string }[] = [];
-    for (let t = from; t <= to; t += 2 * hour) ticks.push({ left: pct(t), label: formatTime(new Date(t)).replace(':00', '') });
-    return { blocks, ticks };
+    const ready = this.readyAt();
+    if (!s || !ready) return [];
+    return this.dayShows().filter((x) => s.getTime() < this.store.turnaroundEnd(x).getTime() && x.start.getTime() < ready.getTime());
   });
+  protected isOverlap(x: Show): boolean { return this.overlaps().some((o) => o.id === x.id); }
 
-  /** The earliest start on this screen and day that fits the film, interval and buffer. */
-  protected readonly suggestedTime = computed<string | null>(() => {
-    if (!this.movie() || !this.screenId() || !this.day()) return null;
-    const day = fromDateInput(this.day());
-    const roundUp = (t: number, step: number) => Math.ceil(t / (step * MINUTE)) * step * MINUTE;
-    const need = (this.runtime() + this.intermission() + this.store.settings().bufferMinutes) * MINUTE;
-    let t = Math.max(day.getTime() + 9 * 60 * MINUTE, roundUp(this.store.now().getTime() + 15 * MINUTE, 15));
-    for (const o of this.dayShows()) {
-      if (t + need <= o.start.getTime()) break;
-      t = Math.max(t, roundUp(this.store.turnaroundEnd(o).getTime(), 5));
-    }
-    const latest = day.getTime() + 23 * 60 * MINUTE;
-    return t <= latest && sameDay(new Date(t), day) ? toTimeInput(new Date(t)) : null;
-  });
-
-  // ------------------------------------------------------------------ Step 3: prices
+  // ------------------------------------------------------------------ Pricing and seat inventory
 
   protected readonly layout = computed(() => this.selectedScreen()?.layout ?? null);
+  /** Confirmed seats sold so far, by category (editing an existing show). */
+  protected readonly sold = computed<Record<string, number>>(() => {
+    const ex = this.existing();
+    const layout = this.layout();
+    const out: Record<string, number> = {};
+    if (!ex || !layout) return out;
+    for (const b of this.store.confirmedBookingsOf(ex.id)) {
+      for (const id of b.seats) {
+        const cat = findSeat(layout, id)?.cell.categoryId;
+        if (cat) out[cat] = (out[cat] ?? 0) + 1;
+      }
+    }
+    return out;
+  });
   protected readonly priceRows = computed(() => {
     const layout = this.layout();
     if (!layout) return [];
@@ -261,23 +187,25 @@ export class ShowEditorPage implements OnInit {
     return layout.categories.map((c) => {
       const price = this.prices()[c.id] ?? 0;
       const seats = counts[c.id] ?? 0;
-      return { cat: c, seats, price, gross: seats * price, diff: price - c.basePrice };
+      return { cat: c, seats, sold: this.sold()[c.id] ?? 0, price, gross: seats * price };
     });
   });
   protected readonly totals = computed(() => {
     const rows = this.priceRows();
     return { seats: rows.reduce((n, r) => n + r.seats, 0), gross: rows.reduce((n, r) => n + r.gross, 0) };
   });
+  protected readonly hasBlocked = computed(() => layoutStats(this.layout()).blocked > 0);
+  protected readonly totalSold = computed(() => Object.values(this.sold()).reduce((n, v) => n + v, 0));
+  /** Cell size that fits the seat map inside the side panel. */
+  protected readonly cellSize = computed(() => Math.max(6, Math.min(20, Math.floor(340 / Math.max(1, this.layout()?.cols ?? 1)) - 3)));
 
   protected setPrice(catId: string, value: string): void {
-    const n = Math.max(0, Math.round(Number(value) || 0));
-    this.prices.update((p) => ({ ...p, [catId]: n }));
+    this.prices.update((p) => ({ ...p, [catId]: Math.max(0, Math.round(Number(value) || 0)) }));
   }
 
+  /** Platform defaults: each category's own base price. */
   protected resetPrices(): void {
-    const next: Record<string, number> = {};
-    for (const c of this.layout()?.categories ?? []) next[c.id] = c.basePrice;
-    this.prices.set(next);
+    this.prices.set(Object.fromEntries((this.layout()?.categories ?? []).map((c) => [c.id, c.basePrice])));
   }
 
   // ------------------------------------------------------------------ Validation
@@ -302,41 +230,13 @@ export class ShowEditorPage implements OnInit {
   });
   protected readonly errors = computed(() => errorsOf(this.issues()));
   protected readonly warnings = computed(() => warningsOf(this.issues()));
-
-  protected readonly stepDone = computed(() => {
-    const scr = this.selectedScreen();
-    return {
-      1: !!this.movie() && !!this.format() && !!this.language(),
-      2: !!scr && this.store.isSchedulable(scr) && !!this.start(),
-      3: this.priceRows().length > 0 && this.priceRows().every((r) => r.price > 0),
-      4: !!this.input() && !this.errors().length,
-    } as Record<number, boolean>;
-  });
-
-  protected stepIssues(n: number): Issue[] { return this.issues().filter((i) => stepOf(i) === n); }
-
-  /** Why "Next" is disabled on the current step. */
-  protected readonly blocker = computed(() => {
-    switch (this.step()) {
-      case 1: return !this.movie() ? 'Choose a film to continue.' : !this.format() || !this.language() ? 'Choose a format and language.' : '';
-      case 2: return !this.selectedScreen() ? 'Choose a screen to continue.' : !this.start() ? 'Set the date and start time.' : '';
-      case 3: return this.stepDone()[3] ? '' : 'Set a price above zero for every seat category.';
-      default: return '';
-    }
-  });
-
-  protected canOpen(n: number): boolean {
-    for (let i = 1; i < n; i++) if (!this.stepDone()[i]) return false;
-    return true;
-  }
-
-  protected go(n: number): void {
-    if (n <= this.step() || this.canOpen(n)) this.step.set(n);
-  }
+  /** Messages other than overlaps, which have their own panel. */
+  protected readonly otherIssues = computed(() => this.issues().filter((i) => !(i.where === 'start' && this.overlaps().length)));
+  protected readonly pricesOk = computed(() => this.priceRows().length > 0 && this.priceRows().every((r) => r.price > 0));
 
   // ------------------------------------------------------------------ Saving
 
-  protected readonly title = computed(() => (this.existing() ? (this.existing()!.publication === 'draft' ? 'Edit draft show' : 'Edit show') : 'Create show'));
+  protected readonly title = computed(() => (this.existing() ? (this.existing()!.publication === 'draft' ? 'Edit draft show' : 'Edit show') : 'Schedule a show'));
   protected readonly canSaveDraft = computed(() => !!this.input() && !this.isPublished());
 
   protected async saveDraft(): Promise<void> {
@@ -351,7 +251,7 @@ export class ShowEditorPage implements OnInit {
 
   protected async publish(): Promise<void> {
     const input = this.input();
-    if (!input || this.errors().length) return;
+    if (!input || this.errors().length || !this.bookingOpen()) return;
     const ok = await this.confirm.ask({
       title: 'Publish this show?',
       message: 'Customers can book it as soon as it is published.',
@@ -384,7 +284,7 @@ export class ShowEditorPage implements OnInit {
     const ex = this.existing();
     if (!input || !ex) return;
     if (this.access().mode === 'prices') {
-      if (!this.stepDone()[3]) return;
+      if (!this.pricesOk()) return;
       const ok = await this.confirm.ask({
         title: 'Update ticket prices?',
         message: 'New prices apply to bookings made from now on. Customers who have already booked keep the price they paid.',
@@ -414,15 +314,10 @@ export class ShowEditorPage implements OnInit {
 
   // ------------------------------------------------------------------ Template helpers
 
-  protected fmtDate(d: Date): string { return formatDate(d); }
+  protected issuesFor(kind: 'price'): Issue[] { return this.issues().filter((i) => (i.where ?? '').startsWith(kind)); }
   protected fmtDay(d: Date): string { return formatDay(d); }
-  protected fmtTime(d: Date): string { return formatTime(d); }
+  protected fmtTime(d: Date): string { return formatTime(d).toLowerCase(); }
   protected fmtMoney(n: number): string { return formatMoney(n); }
   protected fmtNumber(n: number): string { return formatNumber(n); }
   protected fmtDuration(n: number): string { return formatDuration(n); }
-  protected range(p: Record<string, number>): string { return priceRange(p); }
-  protected isFuture(d: Date): boolean { return d.getTime() > this.store.now().getTime(); }
-  protected fmtHhmm(t: string): string { return formatTime(withTime(new Date(), t)); }
-  protected stepFor(i: Issue): number { return stepOf(i); }
-  protected fits(f: ProjectionFormat): boolean { const s = this.selectedScreen(); return !s || formatFits(f, s); }
 }

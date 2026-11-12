@@ -1,13 +1,11 @@
-<div class="page">
-  <app-page-header [title]="title()" [crumbs]="[{ label: 'Shows', link: '/shows' }, { label: title() }]"
-    [subtitle]="existing() ? store.showLabel(existing()!) + ', ' + fmtDay(existing()!.start) : 'Choose a film, place it on a screen, set prices, then save it as a draft or publish it.'">
-    @if (existing(); as ex) {
-      <app-status-badge [status]="ex.publication" />
-      <a class="btn" [routerLink]="['/shows', ex.id]">Cancel</a>
-    } @else {
-      <a class="btn" routerLink="/shows">Cancel</a>
-    }
-  </app-page-header>
+<div class="page editor">
+  <header class="ed-head">
+    <a class="back" [routerLink]="existing() ? ['/shows', existing()!.id] : ['/shows']"><app-icon name="chevronLeft" />Showtimes</a>
+    <div class="ed-title">
+      <h1>{{ title() }}</h1>
+      @if (existing(); as ex) { <app-status-badge [status]="ex.publication" /> }
+    </div>
+  </header>
 
   @if (notFound()) {
     <section class="card">
@@ -25,372 +23,183 @@
       <div class="callout info"><app-icon name="info" /><span>This show is on sale. Changes take effect for customers as soon as you save.</span></div>
     }
 
-    <ol class="stepper" aria-label="Steps">
-      @for (s of steps; track s.n) {
-        <li>
-          <button type="button" class="step" [class.current]="step() === s.n" [class.done]="step() !== s.n && stepDone()[s.n]"
-            [disabled]="s.n > step() && !canOpen(s.n)" [attr.aria-current]="step() === s.n ? 'step' : null" (click)="go(s.n)">
-            <span class="step-num">@if (step() !== s.n && stepDone()[s.n]) { <app-icon name="check" /> } @else { {{ s.n }} }</span>
-            <span class="step-text">
-              <strong>{{ s.label }}</strong>
-              <small class="truncate">
-                @switch (s.n) {
-                  @case (1) { {{ movie()?.title ?? 'Not chosen' }} }
-                  @case (2) { @if (selectedScreen() && start()) { {{ selectedScreen()!.name }} · {{ fmtTime(start()!) }} } @else { Not set } }
-                  @case (3) { {{ priceRows().length ? range(prices()) : 'After the screen' }} }
-                  @case (4) { @if (!input()) { Incomplete } @else if (errors().length) { {{ errors().length }} to fix } @else { Ready } }
-                }
-              </small>
-            </span>
-          </button>
-        </li>
-      }
-    </ol>
-
     <div class="layout">
-      <section class="card main" [attr.aria-label]="steps[step() - 1]!.label">
-        @switch (step()) {
-          @case (1) {
-            <div class="card-head"><h2>Choose the film</h2><span class="small muted">{{ movieList().length }} {{ movieList().length === 1 ? 'film' : 'films' }}</span></div>
-            <fieldset class="plain" [disabled]="structureLocked()">
-              <div class="card-body s1">
-                <div class="picker">
-                  <div class="search-input">
-                    <app-icon name="search" />
-                    <input class="input" type="search" aria-label="Search films" placeholder="Title, language or genre" [value]="movieQuery()" (input)="movieQuery.set($any($event.target).value)" />
-                  </div>
-                  <div class="movie-list" role="group" aria-label="Films">
-                    @for (m of movieList(); track m.id) {
-                      <button type="button" class="movie-opt" [attr.aria-pressed]="m.id === movieId()" (click)="chooseMovie(m)">
-                        <img [src]="m.posterUrl ?? ''" alt="" loading="lazy" />
-                        <span class="mo-text">
-                          <strong class="truncate">{{ m.title }}</strong>
-                          <small>{{ fmtDuration(m.runtime) }} · {{ m.certification }} · {{ m.formats.join(', ') }}</small>
-                          <small class="truncate">{{ m.languages.join(', ') }}</small>
-                          @if (isFuture(m.releaseDate)) { <small class="rel">Releases {{ fmtDate(m.releaseDate) }}</small> }
-                        </span>
-                        @if (m.id === movieId()) { <app-icon name="check" class="sel-mark" /> }
-                      </button>
-                    } @empty {
-                      <p class="muted small pad">No films match "{{ movieQuery() }}". Add new films in Movies.</p>
-                    }
-                  </div>
-                </div>
-
-                <div class="movie-detail">
-                  @if (movie(); as m) {
-                    <div class="md-head">
-                      <img class="md-poster" [src]="m.posterUrl ?? ''" [alt]="m.title + ' poster'" />
-                      <div class="md-info">
-                        <h3>{{ m.title }}</h3>
-                        <dl class="facts compact">
-                          <dt>Certificate</dt><dd><span class="tag">{{ m.certification }}</span></dd>
-                          <dt>Runtime</dt><dd>{{ fmtDuration(m.runtime) }}</dd>
-                          <dt>Release</dt><dd>{{ fmtDate(m.releaseDate) }}</dd>
-                          <dt>Languages</dt><dd>{{ m.languages.join(', ') }}</dd>
-                          <dt>Genres</dt><dd>{{ m.genres.join(', ') }}</dd>
-                          <dt>Director</dt><dd>{{ m.director }}</dd>
-                        </dl>
-                      </div>
-                    </div>
-                    <div class="field">
-                      <span class="field-label" id="ed-format">Projection format</span>
-                      <div class="segmented wrap" role="group" aria-labelledby="ed-format">
-                        @for (f of m.formats; track f) { <button type="button" [attr.aria-pressed]="format() === f" (click)="format.set(f)">{{ f }}</button> }
-                      </div>
-                      <span class="hint">Only the formats this film is released in are listed.</span>
-                    </div>
-                    <div class="field">
-                      <span class="field-label" id="ed-lang">Language</span>
-                      <div class="segmented wrap" role="group" aria-labelledby="ed-lang">
-                        @for (l of m.languages; track l) { <button type="button" [attr.aria-pressed]="language() === l" (click)="language.set(l)">{{ l }}</button> }
-                      </div>
-                    </div>
-                    @for (i of stepIssues(1); track $index) {
-                      <div class="callout {{ i.level === 'error' ? 'danger' : 'warning' }}"><app-icon name="alert" /><span>{{ i.message }}</span></div>
-                    }
-                  } @else {
-                    <app-empty-state icon="movie" title="No film chosen" text="Pick a film from the list to see its details and choose the format and language." />
+      <div class="col-main">
+        <section class="card">
+          <fieldset class="plain" [disabled]="structureLocked()">
+            <div class="card-body sect">
+              <h2>Movie and screen</h2>
+              <div class="field">
+                <label for="ed-movie">Movie</label>
+                <select id="ed-movie" class="select" (change)="chooseMovie($any($event.target).value)">
+                  <option value="" disabled [selected]="!movieId()">Choose a movie</option>
+                  @for (m of movieList(); track m.id) {
+                    <option [value]="m.id" [selected]="m.id === movieId()">{{ m.title }} · {{ m.certification }} · {{ fmtDuration(m.runtime) }}</option>
                   }
-                </div>
+                </select>
               </div>
-            </fieldset>
-          }
-
-          @case (2) {
-            <div class="card-head"><h2>Screen and schedule</h2><span class="small muted">Buffer between shows: {{ store.settings().bufferMinutes }} min</span></div>
-            <div class="card-body stack">
-              <fieldset class="plain stack" [disabled]="structureLocked()">
-                <div class="field theatre-field">
-                  <label for="ed-theatre">Theatre</label>
-                  <select id="ed-theatre" class="select" (change)="chooseTheatre($any($event.target).value)">
-                    <option value="" disabled [selected]="!theatreId()">Choose a theatre</option>
-                    @for (t of theatreOptions(); track t.id) {
-                      <option [value]="t.id" [selected]="t.id === theatreId()" [disabled]="t.status !== 'active'">{{ t.name }}{{ t.status !== 'active' ? ' (inactive)' : '' }}</option>
+              <div class="two">
+                <div class="field">
+                  <label for="ed-screen">Screen</label>
+                  <select id="ed-screen" class="select" (change)="chooseScreen($any($event.target).value)">
+                    <option value="" disabled [selected]="!screenId()">Choose a screen</option>
+                    @for (o of screenOptions(); track o.screen.id) {
+                      <option [value]="o.screen.id" [selected]="o.screen.id === screenId()" [disabled]="!o.ok">{{ o.label }}{{ o.ok ? '' : ' (' + o.reason + ')' }}</option>
                     }
                   </select>
                 </div>
-
                 <div class="field">
-                  <span class="field-label" id="ed-screen">Screen</span>
-                  @if (!theatreId()) {
-                    <p class="muted small">Choose a theatre to see its screens.</p>
-                  } @else {
-                    <div class="screen-grid" role="radiogroup" aria-labelledby="ed-screen">
-                      @for (o of screenOptions(); track o.screen.id) {
-                        <label class="screen-opt" [class.selected]="o.screen.id === screenId()" [class.disabled]="!o.ok">
-                          <input type="radio" name="ed-screen" [checked]="o.screen.id === screenId()" [disabled]="!o.ok" (change)="chooseScreen(o.screen.id)" />
-                          <span class="so-text">
-                            <strong>{{ o.screen.name }} <span class="tag">{{ o.screen.type }}</span></strong>
-                            @if (o.ok) {
-                              <small>{{ fmtNumber(o.seats) }} seats · {{ o.showsThatDay }} {{ o.showsThatDay === 1 ? 'show' : 'shows' }} that day</small>
-                            } @else {
-                              <small class="why"><app-icon name="lock" />{{ o.reason }}</small>
-                            }
-                          </span>
-                        </label>
-                      } @empty {
-                        <p class="muted small">This theatre has no screens yet.</p>
-                      }
-                    </div>
-                  }
+                  <label for="ed-format">Format</label>
+                  <select id="ed-format" class="select" [disabled]="!movie()" (change)="format.set($any($event.target).value)">
+                    @for (f of movie()?.formats ?? []; track f) { <option [value]="f" [selected]="f === format()">{{ f }}</option> }
+                  </select>
                 </div>
+              </div>
+              <div class="two">
+                <div class="field">
+                  <label for="ed-lang">Language</label>
+                  <select id="ed-lang" class="select" [disabled]="!movie()" (change)="language.set($any($event.target).value)">
+                    @for (l of movie()?.languages ?? []; track l) { <option [value]="l" [selected]="l === language()">{{ l }}</option> }
+                  </select>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+        </section>
 
-                <div class="time-grid">
-                  <div class="field">
-                    <label for="ed-date">Show date</label>
-                    <input id="ed-date" class="input" type="date" [value]="day()" (change)="day.set($any($event.target).value)" />
-                  </div>
-                  <div class="field">
-                    <label for="ed-time">Start time</label>
-                    <input id="ed-time" class="input" type="time" step="300" [value]="time()" (change)="time.set($any($event.target).value)" />
-                    @if (suggestedTime(); as t) {
-                      @if (t !== time()) { <button type="button" class="link-btn small" (click)="time.set(t)">Use the next free start, {{ fmtHhmm(t) }}</button> }
-                    }
-                  </div>
-                  <div class="field">
-                    <label for="ed-int">Interval (minutes)</label>
-                    <input id="ed-int" class="input" type="number" min="0" max="30" step="5" [value]="intermission()" (change)="intermission.set(+$any($event.target).value || 0)" />
-                  </div>
-                  <div class="field">
-                    <span class="field-label">Ends at</span>
-                    <div class="end-box">
-                      @if (end(); as e) {
-                        <strong>{{ fmtTime(e) }}</strong>
-                        <small class="muted">{{ fmtDuration(runtime()) }} film + {{ intermission() }} min interval · screen ready {{ fmtTime(readyAt()!) }}</small>
-                      } @else {
-                        <span class="muted small">Set a start time</span>
-                      }
-                    </div>
-                  </div>
+        <section class="card">
+          <fieldset class="plain" [disabled]="structureLocked()">
+            <div class="card-body sect">
+              <h2>Date and time</h2>
+              <div class="two">
+                <div class="field">
+                  <label for="ed-date">Date</label>
+                  <input id="ed-date" class="input" type="date" [value]="day()" (change)="day.set($any($event.target).value)" />
                 </div>
-              </fieldset>
+                <div class="field">
+                  <label for="ed-time">Start time</label>
+                  <input id="ed-time" class="input" type="time" step="300" [value]="time()" (change)="time.set($any($event.target).value)" />
+                </div>
+              </div>
+              @if (end(); as e) {
+                <p class="ends">Ends {{ fmtTime(e) }}. The hall is free again at {{ fmtTime(readyAt()!) }} after {{ store.settings().bufferMinutes }} minutes of cleaning.</p>
+              }
+
+              @if (overlaps().length) {
+                <div class="overlap" role="alert">
+                  <strong><app-icon name="alert" />Overlaps on {{ selectedScreen()?.name }}</strong>
+                  <ul>
+                    @for (x of overlaps(); track x.id) { <li>{{ store.movie(x.movieId)?.title }} · {{ fmtTime(x.start) }} to {{ fmtTime(store.showEnd(x)) }}</li> }
+                  </ul>
+                </div>
+              }
 
               @if (selectedScreen(); as scr) {
-                <div class="tl-wrap">
-                  <div class="tl-head">
-                    <h3>{{ scr.name }} on {{ day() ? fmtDay(start() ?? store.operationalDate()) : '' }}</h3>
-                    <span class="legend small muted">
-                      <span><i class="sw published"></i>Published</span>
-                      <span><i class="sw draft"></i>Draft</span>
-                      <span><i class="sw new"></i>This show</span>
-                      <span><i class="sw buffer"></i>Cleaning buffer</span>
-                    </span>
-                  </div>
-                  <div class="tl" aria-hidden="true">
-                    <span class="lane-label">Booked</span>
-                    <div class="tl-track">
-                      @for (b of timeline().blocks; track b.id) {
-                        @if (b.kind !== 'new') {
-                          <div class="tl-block {{ b.kind }}" [class.conflict]="b.conflict" [style.left.%]="b.left" [style.width.%]="b.width" [attr.title]="b.label"><span>{{ b.label }}</span></div>
-                          <div class="tl-buffer" [style.left.%]="b.left + b.width" [style.width.%]="b.buffer"></div>
-                        }
-                      }
-                    </div>
-                    <span class="lane-label">This show</span>
-                    <div class="tl-track">
-                      @for (b of timeline().blocks; track b.id) {
-                        @if (b.kind === 'new') {
-                          <div class="tl-block new" [class.conflict]="b.conflict" [style.left.%]="b.left" [style.width.%]="b.width" [attr.title]="b.label"><span>{{ b.label }}</span></div>
-                          <div class="tl-buffer" [style.left.%]="b.left + b.width" [style.width.%]="b.buffer"></div>
-                        }
-                      }
-                    </div>
-                    <span></span>
-                    <div class="tl-axis">
-                      @for (t of timeline().ticks; track t.left) { <span [style.left.%]="t.left">{{ t.label }}</span> }
-                    </div>
-                  </div>
-                  @if (dayShows().length) {
-                    <ul class="day-list">
+                @if (dayShows().length) {
+                  <div class="day">
+                    <p class="day-title">{{ scr.name }} on {{ fmtDay(start() ?? store.operationalDate()) }}</p>
+                    <ul>
                       @for (x of dayShows(); track x.id) {
-                        <li>
-                          <span class="nowrap">{{ fmtTime(x.start) }} – {{ fmtTime(store.showEnd(x)) }}</span>
-                          <span class="truncate">{{ store.movie(x.movieId)?.title }}</span>
-                          <app-status-badge [status]="x.publication" />
-                        </li>
+                        <li [class.hit]="isOverlap(x)">{{ store.movie(x.movieId)?.title }} · {{ fmtTime(x.start) }} to {{ fmtTime(store.showEnd(x)) }}</li>
+                      }
+                      @if (start() && end() && !overlaps().length) {
+                        <li class="mine">{{ movie()?.title ?? 'This show' }} · {{ fmtTime(start()!) }} to {{ fmtTime(end()!) }}</li>
                       }
                     </ul>
-                  } @else {
-                    <p class="small muted">No other shows on this screen that day.</p>
-                  }
-                </div>
+                  </div>
+                } @else {
+                  <p class="small muted">No other shows on {{ scr.name }} that day.</p>
+                }
               }
-              @if (stepIssues(2).length) {
-                <div class="issues">
-                  @for (i of stepIssues(2); track $index) {
-                    <div class="callout {{ i.level === 'error' ? 'danger' : 'warning' }}"><app-icon name="alert" /><span>{{ i.message }}</span></div>
-                  }
-                </div>
-              }
-            </div>
-          }
 
-          @case (3) {
-            <div class="card-head">
-              <h2>Ticket prices</h2>
-              @if (priceRows().length) { <button class="btn sm" type="button" (click)="resetPrices()"><app-icon name="undo" />Reset to base prices</button> }
-            </div>
-            @if (!priceRows().length) {
-              <app-empty-state icon="seats" title="Choose a screen first" text="Prices are set per seat category of the screen's published layout.">
-                <button class="btn" type="button" (click)="step.set(2)">Go to screen and schedule</button>
-              </app-empty-state>
-            } @else {
-              <div class="table-wrap">
-                <table class="data-table price-table">
-                  <thead>
-                    <tr><th>Seat category</th><th class="num">Seats</th><th class="num">Base price</th><th>Show price</th><th class="num">Potential gross</th></tr>
-                  </thead>
-                  <tbody>
-                    @for (r of priceRows(); track r.cat.id) {
-                      <tr>
-                        <td>
-                          <span class="cat"><i class="sw" [style.background]="r.cat.color"></i><strong>{{ r.cat.name }}</strong></span>
-                          @if (r.cat.rule) { <small class="muted rule">{{ r.cat.rule }}</small> }
-                        </td>
-                        <td class="num">{{ fmtNumber(r.seats) }}</td>
-                        <td class="num muted">{{ fmtMoney(r.cat.basePrice) }}</td>
-                        <td>
-                          <div class="price-cell">
-                            <div class="input-group price-input" [class.invalid]="!(r.price > 0)">
-                              <span>₹</span>
-                              <input class="input" type="number" min="0" step="10" [attr.aria-label]="r.cat.name + ' price'" [value]="r.price" (input)="setPrice(r.cat.id, $any($event.target).value)" />
-                            </div>
-                            @if (r.diff !== 0 && r.price > 0) { <small [class]="r.diff > 0 ? 'up' : 'down'">{{ r.diff > 0 ? '+' : '−' }}{{ fmtMoney(r.diff > 0 ? r.diff : -r.diff) }}</small> }
-                          </div>
-                        </td>
-                        <td class="num">{{ fmtMoney(r.gross) }}</td>
-                      </tr>
-                    }
-                  </tbody>
-                  <tfoot>
-                    <tr><td>Full house</td><td class="num">{{ fmtNumber(totals().seats) }}</td><td></td><td></td><td class="num strong">{{ fmtMoney(totals().gross) }}</td></tr>
-                  </tfoot>
-                </table>
-              </div>
-              <div class="card-body stack-sm">
-                <p class="small muted">Potential gross is the ticket revenue if every seat sells. Customers also pay a convenience fee of {{ fmtMoney(store.settings().convenienceFee) }} per ticket, which is not included here.</p>
-                @for (i of stepIssues(3); track $index) {
+              @for (i of otherIssues(); track $index) {
+                @if (i.where !== 'price' && !i.where?.startsWith('price:')) {
                   <div class="callout {{ i.level === 'error' ? 'danger' : 'warning' }}"><app-icon name="alert" /><span>{{ i.message }}</span></div>
                 }
+              }
+            </div>
+          </fieldset>
+        </section>
+
+        <section class="card">
+          <div class="card-body sect">
+            <div class="sect-head">
+              <h2>Pricing</h2>
+              <button type="button" class="reset" [disabled]="!priceRows().length" (click)="resetPrices()"><app-icon name="undo" />Use platform defaults</button>
+            </div>
+            @if (!priceRows().length) {
+              <p class="small muted">Choose a screen to set its prices.</p>
+            } @else {
+              <div class="prices">
+                @for (r of priceRows(); track r.cat.id) {
+                  <div class="field">
+                    <label [for]="'ed-price-' + r.cat.id">{{ r.cat.name }} price</label>
+                    <input [id]="'ed-price-' + r.cat.id" class="input" type="number" min="0" step="10" [value]="r.price" (input)="setPrice(r.cat.id, $any($event.target).value)" />
+                  </div>
+                }
               </div>
+              @for (i of issuesFor('price'); track $index) {
+                <div class="callout {{ i.level === 'error' ? 'danger' : 'warning' }}"><app-icon name="alert" /><span>{{ i.message }}</span></div>
+              }
             }
+            <label class="check booking"><input type="checkbox" [checked]="bookingOpen()" (change)="bookingOpen.set($any($event.target).checked)" />Booking open (customers can buy seats once published)</label>
+          </div>
+        </section>
+
+        <div class="actions">
+          <a class="btn ghost" [routerLink]="existing() ? ['/shows', existing()!.id] : ['/shows']">Back</a>
+          @if (isPublished()) {
+            <button class="btn primary" type="button" [disabled]="!input() || (access().mode === 'prices' ? !pricesOk() : errors().length > 0)" (click)="saveChanges()">
+              <app-icon name="check" />{{ access().mode === 'prices' ? 'Save price changes' : 'Save changes' }}
+            </button>
+          } @else {
+            <button class="btn" type="button" [disabled]="!canSaveDraft()" (click)="saveDraft()">Save as draft</button>
+            <button class="btn primary" type="button" [disabled]="!input() || errors().length > 0 || !bookingOpen()" (click)="publish()"><app-icon name="check" />Publish</button>
           }
+        </div>
+      </div>
 
-          @case (4) {
-            <div class="card-head"><h2>Review</h2></div>
-            <div class="card-body stack">
-              @if (!input()) {
-                <div class="callout warning"><app-icon name="alert" /><span>Some details are missing. Go back and finish the earlier steps.</span></div>
-              } @else if (errors().length) {
-                <div class="callout danger">
-                  <app-icon name="alert" />
-                  <div><strong>{{ errors().length }} {{ errors().length === 1 ? 'problem blocks' : 'problems block' }} publishing.</strong>
-                    <ul>@for (e of errors(); track $index) { <li>{{ e.message }} <button type="button" class="link-btn" (click)="step.set(stepFor(e))">Fix</button></li> }</ul>
-                    @if (!isPublished()) { <span>You can still save it as a draft.</span> }
-                  </div>
-                </div>
-              } @else {
-                <div class="callout success"><app-icon name="check" /><span>All checks passed: the screen is active with a published layout, nothing overlaps and the {{ store.settings().bufferMinutes }}-minute cleaning buffer is kept.</span></div>
-              }
-              @if (warnings().length) {
-                <div class="callout warning"><app-icon name="alert" /><div><strong>Check before saving</strong><ul>@for (w of warnings(); track $index) { <li>{{ w.message }}</li> }</ul></div></div>
-              }
-
-              <div class="review-grid">
-                <div class="panel">
-                  <p class="eyebrow">Film</p>
-                  <div class="rv-film">
-                    @if (movie(); as m) { <img class="poster-thumb big" [src]="m.posterUrl ?? ''" alt="" /> }
-                    <dl class="facts">
-                      <dt>Title</dt><dd>{{ movie()?.title ?? '—' }}</dd>
-                      <dt>Format</dt><dd>{{ format() || '—' }}</dd>
-                      <dt>Language</dt><dd>{{ language() || '—' }}</dd>
-                      <dt>Certificate</dt><dd>{{ movie()?.certification ?? '—' }}</dd>
-                    </dl>
-                  </div>
-                </div>
-                <div class="panel">
-                  <p class="eyebrow">Schedule</p>
-                  <dl class="facts">
-                    <dt>Theatre</dt><dd>{{ theatre()?.name ?? '—' }}</dd>
-                    <dt>Screen</dt><dd>{{ selectedScreen()?.name ?? '—' }}</dd>
-                    <dt>Date</dt><dd>{{ start() ? fmtDay(start()!) : '—' }}</dd>
-                    <dt>Time</dt><dd>@if (start() && end()) { {{ fmtTime(start()!) }} – {{ fmtTime(end()!) }} } @else { — }</dd>
-                    <dt>Interval</dt><dd>{{ intermission() ? intermission() + ' min' : 'None' }}</dd>
-                    <dt>Screen ready</dt><dd>{{ readyAt() ? fmtTime(readyAt()!) : '—' }}</dd>
-                  </dl>
-                </div>
-                <div class="panel">
-                  <p class="eyebrow">Prices</p>
-                  <dl class="facts">
-                    @for (r of priceRows(); track r.cat.id) { <dt>{{ r.cat.name }}</dt><dd>{{ fmtMoney(r.price) }} <span class="muted small">× {{ r.seats }}</span></dd> }
-                    <dt>Full house</dt><dd>{{ fmtMoney(totals().gross) }}</dd>
-                  </dl>
-                </div>
+      <aside class="col-side" aria-label="Show summary">
+        <section class="card film">
+          @if (movie(); as m) {
+            <div class="film-row">
+              <img [src]="m.posterUrl ?? ''" [alt]="m.title + ' poster'" />
+              <div class="film-info">
+                <strong>{{ m.title }}</strong>
+                <span>{{ m.certification }} · {{ fmtDuration(m.runtime) }} · {{ m.genres.join(', ') }}</span>
+                <span>{{ m.languages.join(', ') }}</span>
+                <span>Release {{ fmtDay(m.releaseDate) }}</span>
               </div>
             </div>
+          } @else {
+            <p class="small muted film-empty">Choose a movie to see its details.</p>
           }
-        }
+        </section>
 
-        <div class="card-foot">
-          <span class="small muted foot-note">
-            @if (blocker()) { {{ blocker() }} } @else if (step() < 4) { Next: {{ steps[step()]!.label }} }
-          </span>
-          <div class="row-wrap">
-            @if (step() > 1) { <button class="btn" type="button" (click)="step.set(step() - 1)"><app-icon name="chevronLeft" />Back</button> }
-            @if (step() < 4) {
-              @if (canSaveDraft() && step() > 1) { <button class="btn" type="button" (click)="saveDraft()">Save as draft</button> }
-              <button class="btn primary" type="button" [disabled]="!!blocker()" (click)="step.set(step() + 1)">Continue<app-icon name="chevronRight" /></button>
-            } @else if (isPublished()) {
-              <button class="btn primary" type="button" [disabled]="!input() || (access().mode === 'prices' ? !stepDone()[3] : errors().length > 0)" (click)="saveChanges()">
-                {{ access().mode === 'prices' ? 'Save price changes' : 'Save changes' }}
-              </button>
-            } @else {
-              <button class="btn" type="button" [disabled]="!canSaveDraft()" (click)="saveDraft()">Save as draft</button>
-              <button class="btn primary" type="button" [disabled]="!input() || errors().length > 0" (click)="publish()"><app-icon name="upload" />Publish show</button>
-            }
-          </div>
-        </div>
-      </section>
-
-      <aside class="card side" aria-label="Show summary">
-        <div class="card-head"><h2>This show</h2>
-          @if (input()) { <span class="badge {{ errors().length ? 'danger' : 'success' }}">{{ errors().length ? errors().length + ' to fix' : 'Valid' }}</span> }
-        </div>
-        <div class="card-body side-body">
-          @if (movie(); as m) {
-            <div class="side-film"><img class="poster-thumb" [src]="m.posterUrl ?? ''" alt="" /><span><strong>{{ m.title }}</strong><small class="muted">{{ format() }} · {{ language() }} · {{ fmtDuration(m.runtime) }}</small></span></div>
-          } @else { <p class="muted small">No film chosen yet.</p> }
-          <dl class="facts compact">
-            <dt>Screen</dt><dd>{{ selectedScreen()?.name ?? '—' }}</dd>
-            <dt>Theatre</dt><dd class="truncate">{{ theatre()?.name ?? '—' }}</dd>
-            <dt>Date</dt><dd>{{ start() ? fmtDay(start()!) : '—' }}</dd>
-            <dt>Time</dt><dd>@if (start() && end()) { {{ fmtTime(start()!) }} – {{ fmtTime(end()!) }} } @else { — }</dd>
-            <dt>Prices</dt><dd>{{ priceRows().length ? range(prices()) : '—' }}</dd>
-          </dl>
-          @if (warnings().length) { <p class="small warn-text">{{ warnings().length }} {{ warnings().length === 1 ? 'warning' : 'warnings' }} to review</p> }
-        </div>
+        <section class="card inv">
+          <div class="inv-head"><h2>Seat inventory</h2>@if (layout()) { <span>{{ fmtNumber(totals().seats) }} seats</span> }</div>
+          @if (layout(); as l) {
+            <div class="inv-map">
+              <app-seat-map [layout]="l" [legend]="false" [cellSize]="cellSize()" />
+              <ul class="key">
+                @for (c of l.categories; track c.id) { <li><i class="k" [style.background]="c.color"></i>{{ c.name }}</li> }
+                @if (hasBlocked()) { <li><i class="k blocked"></i>Blocked</li> }
+                @if (totalSold()) { <li><i class="k booked"></i>Booked</li> }
+              </ul>
+            </div>
+            <table class="inv-table">
+              <thead><tr><th>Category</th><th class="num">Seats</th><th class="num">Sold</th><th class="num">Price</th></tr></thead>
+              <tbody>
+                @for (r of priceRows(); track r.cat.id) {
+                  <tr><td>{{ r.cat.name }}</td><td class="num">{{ r.seats }}</td><td class="num">{{ r.sold }}</td><td class="num">{{ fmtMoney(r.price) }}</td></tr>
+                }
+              </tbody>
+            </table>
+            <p class="inv-note">Full house at these prices: {{ fmtMoney(totals().gross) }} before the booking fee.</p>
+          } @else {
+            <p class="small muted inv-empty">Choose a screen to see its seats.</p>
+          }
+        </section>
       </aside>
     </div>
   }
