@@ -90,23 +90,12 @@ import { TheatreStatusActions } from './theatre-status';
               }
             </section>
           } @else {
-          <p class="stats" aria-label="The day at a glance">
-            <span><b>{{ day().shows }}</b> {{ day().shows === 1 ? 'show' : 'shows' }} {{ isToday() ? 'today' : 'that day' }}@if (day().drafts) { <small>({{ day().drafts }} draft)</small> }</span>
-            <span><b>{{ day().seats }}</b> seats sold<small>({{ day().occupancy }}% full)</small></span>
-            <span><b>{{ day().gross }}</b> gross</span>
-            @if (day().cancelled) { <span class="bad"><b>{{ day().cancelled }}</b> cancelled</span> }
-          </p>
-
-          <section class="card details">
-            <dl class="facts cols">
+          <section class="card contact-card">
+            <div class="card-head"><h2>Contact</h2><button type="button" class="btn sm" (click)="editDetails()"><app-icon name="edit" />Edit</button></div>
+            <dl class="facts stack-facts">
               <dt>Address</dt><dd class="addr">{{ t.address }}, {{ t.area }}, {{ t.city }} {{ t.pincode }}</dd>
               <dt>Phone</dt><dd><a class="contact" [href]="'tel:' + t.phone.replaceAll(' ', '')">{{ t.phone }}</a></dd>
               <dt>Email</dt><dd class="addr"><a class="contact" [href]="'mailto:' + t.email">{{ t.email }}</a></dd>
-            </dl>
-            <dl class="facts cols">
-              <dt>Screens</dt><dd>{{ screens().length }} <span class="muted">({{ activeScreens() }} active)</span></dd>
-              <dt>Capacity</dt><dd>{{ formatNumber(capacity()) }} bookable seats</dd>
-              <dt>Updated</dt><dd>{{ formatDateTime(t.updatedAt) }}</dd>
             </dl>
           </section>
 
@@ -127,6 +116,9 @@ import { TheatreStatusActions } from './theatre-status';
   `,
   styles: `
     .stats { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; padding: 0 4px; font-size: 0.86rem; color: var(--text-muted); }
+    .stack-facts { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px 12px; margin: 0; padding: 16px 18px; }
+    .stack-facts dt { color: var(--text-muted); font-size: 0.82rem; }
+    .stack-facts dd { margin: 0; }
     .stats b { color: var(--text); font-weight: 700; }
     .stats small { margin-left: 5px; font-size: inherit; }
     .stats .bad b { color: var(--danger); }
@@ -169,14 +161,14 @@ import { TheatreStatusActions } from './theatre-status';
     .edit-head h1 { margin: 2px 0 0; font-size: 1.5rem; }
     .edit-head .eyebrow { margin: 0; }
     .cover-wrap { position: relative; }
-    .cover { position: relative; display: grid; place-items: center; height: 260px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg);
+    .cover { position: relative; display: grid; place-items: center; height: 190px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg);
       background:
         radial-gradient(760px 300px at 10% 125%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 68%),
         radial-gradient(640px 280px at 92% -20%, rgba(120, 150, 255, 0.28), transparent 70%),
         linear-gradient(135deg, #12141a 0%, #1b1f2a 55%, #0e1015 100%); }
     /* A photo gets a wider, taller banner so a normal landscape picture is not cut to a sliver. */
     .cover-wrap { container-type: inline-size; }
-    .cover.photo { width: 100%; height: clamp(260px, 36cqw, 420px); }
+    .cover.photo { width: 100%; height: clamp(190px, 24cqw, 300px); }
     .cover.branded { background: #fff; border-color: var(--border-strong); }
     .cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
     .cover.branded .cover-img { object-fit: contain; padding: 22px 0; }
@@ -235,28 +227,6 @@ export class TheatreDetailPage {
   readonly capacity = computed(() => this.screens().reduce((n, s) => n + this.store.capacity(s.id), 0));
   readonly isToday = computed(() => sameDay(this.store.operationalDate(), this.store.now()));
   readonly dayWord = computed(() => (this.isToday() ? 'Today’s' : formatDay(this.store.operationalDate())));
-
-  private readonly dayShows = computed(() => {
-    const date = this.store.operationalDate();
-    return this.store.shows().filter((s) => s.theatreId === this.theatreId() && sameDay(s.start, date));
-  });
-
-  readonly day = computed(() => {
-    const shows = this.dayShows();
-    const live = shows.filter((s) => !s.cancellation);
-    const published = live.filter((s) => s.publication === 'published');
-    const seats = published.reduce((n, s) => n + this.store.soldSeats(s.id), 0);
-    const cap = published.reduce((n, s) => n + this.store.capacity(s.screenId), 0);
-    return {
-      shows: live.length,
-      published: published.length,
-      drafts: live.length - published.length,
-      cancelled: shows.length - live.length,
-      seats: formatNumber(seats),
-      occupancy: cap ? Math.round((seats / cap) * 100) : 0,
-      gross: formatMoneyShort(published.reduce((n, s) => n + this.store.revenue(s.id), 0)),
-    };
-  });
 
   /** Reads the chosen photo, shrinks it to a sensible size and saves it as the theatre's cover. */
   pickCover(event: Event): void {
